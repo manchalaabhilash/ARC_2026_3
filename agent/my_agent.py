@@ -75,6 +75,7 @@ class MyAgent(Agent):
         self.action_right: Optional[GameAction] = None
         self.action_up: Optional[GameAction] = None
         self.action_down: Optional[GameAction] = None
+        self.is_click_game_flag: bool = False
 
     @property
     def name(self) -> str:
@@ -119,6 +120,32 @@ class MyAgent(Agent):
         self.action_right = None
         self.action_up = None
         self.action_down = None
+        self.is_click_game_flag = False
+
+    def reset_exploration_only(self) -> None:
+        """Soft reset: clear the exploration graph but preserve learned colors/controls.
+        
+        Used on GAME_OVER to allow re-exploration of the level without losing
+        learned color knowledge (interactive, non-interactive, useless clicks).
+        """
+        self.visited_states = set()
+        self.graph = {}
+        self.unvisited_actions = {}
+        self.dead_ends = set()
+        self.last_state = None
+        self.last_action = None
+        self.last_grid = None
+        self.prev_player_pos = None
+        self.action_queue = []
+        self.waiting_for_stabilization = False
+        self.last_stable_grid = None
+        # Keep: player_pos, player_pattern, player_area, player_colors
+        # Keep: obstacle_colors, interactive_colors, non_interactive_colors, useless_clicks_counts
+        # Keep: action_to_dir, dir_to_action, step_w, step_h, action_left/right/up/down
+        # Keep: obstacles, dependencies, is_click_game_flag
+        # Reset probing so controls are re-validated after GAME_OVER
+        self.probing_stage = True
+        self.probed_actions = set()
 
     def get_background_colors(self, grid: List[List[List[int]]]) -> Set[int]:
         """Dynamically detect background and padding colors by frequency."""
@@ -140,8 +167,8 @@ class MyAgent(Agent):
                     bg_colors.add(color)
         return bg_colors
 
-    def get_components(self, grid: List[List[List[int]]], bg_colors: Set[int]) -> List[Dict[str, Any]]:
-        """Segment the grid into connected components of adjacent non-background pixels, ignoring UI borders."""
+    def get_components(self, grid: List[List[List[int]]], bg_colors: Set[int], same_color: bool = False) -> List[Dict[str, Any]]:
+        """Segment the grid into connected components of adjacent non-background pixels."""
         if not grid or not grid[0]:
             return []
         num_layers = len(grid)
@@ -151,35 +178,33 @@ class MyAgent(Agent):
         visited = [[False] * width for _ in range(height)]
         components = []
         
-        def is_foreground(px: int, py: int) -> bool:
+        def get_color(px: int, py: int) -> Optional[int]:
             for l in range(num_layers):
-                if grid[l][py][px] not in bg_colors:
-                    return True
-            return False
+                val = grid[l][py][px]
+                if val not in bg_colors:
+                    return val
+            return None
+
+        def is_foreground(px: int, py: int) -> bool:
+            return get_color(px, py) is not None
 
         for y in range(height):
-            # Ignore UI overlays/borders
-            if y <= 3 or y >= height - 4:
-                continue
             for x in range(width):
-                if x <= 3 or x >= width - 4:
-                    continue
                 if is_foreground(x, y) and not visited[y][x]:
                     comp = []
                     queue = [(x, y)]
                     visited[y][x] = True
+                    start_color = get_color(x, y)
                     while queue:
                         cx, cy = queue.pop(0)
                         comp.append((cx, cy))
                         for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                             nx, ny = cx + dx, cy + dy
                             if 0 <= nx < width and 0 <= ny < height and not visited[ny][nx]:
-                                # Ignore UI overlays/borders in neighbor expansion too
-                                if ny <= 3 or ny >= height - 4 or nx <= 3 or nx >= width - 4:
-                                    continue
                                 if is_foreground(nx, ny):
-                                    visited[ny][nx] = True
-                                    queue.append((nx, ny))
+                                    if not same_color or get_color(nx, ny) == start_color:
+                                        visited[ny][nx] = True
+                                        queue.append((nx, ny))
                                     
                     # Process component
                     xs = [p[0] for p in comp]
@@ -256,12 +281,15 @@ class MyAgent(Agent):
             
         grid = frame.frame
         bg_colors = self.get_background_colors(grid)
-        components = self.get_components(grid, bg_colors)
+        components = self.get_components(grid, bg_colors, same_color=self.is_click_game_flag)
         
         # Convert components to a hashable format
         comp_rep = []
         for comp in components:
             cx, cy = comp["centroid"]
+            # Ignore UI overlays/borders in state hash to avoid step-counter noise
+            if cy <= 3 or cy >= len(grid[0]) - 4 or cx <= 3 or cx >= len(grid[0][0]) - 4:
+                continue
             comp_rep.append((cx, cy, comp["pattern"]))
             
         player_rep = self.player_pos if self.player_pos is not None else (-1, -1)
@@ -273,7 +301,7 @@ class MyAgent(Agent):
         
         Prioritizes smaller components by sorting by area ascending.
         """
-        components = self.get_components(grid, bg_colors)
+        components = self.get_components(grid, bg_colors, same_color=self.is_click_game_flag)
         candidates = []
         for comp in components:
             cx, cy = comp["centroid"]
@@ -335,7 +363,7 @@ class MyAgent(Agent):
     def find_color_position(self, grid: List[List[List[int]]], color: int) -> Optional[Tuple[int, int]]:
         """Locates the coordinates of a specific color block in the grid."""
         bg_colors = self.get_background_colors(grid)
-        components = self.get_components(grid, bg_colors)
+        components = self.get_components(grid, bg_colors, same_color=self.is_click_game_flag)
         for comp in components:
             if color in comp["colors"]:
                 return comp["centroid"]
@@ -586,23 +614,33 @@ class MyAgent(Agent):
 
         # 2. Reset triggers
         if latest_frame.state in (GameState.NOT_PLAYED, GameState.GAME_OVER):
-            if latest_frame.state is GameState.GAME_OVER and self.last_state is not None:
-                self.dead_ends.add(self.last_state)
-                
-            self.last_state = None
-            self.last_action = None
-            self.last_grid = None
-            self.prev_player_pos = None
-            self.action_queue = []
-            self.waiting_for_stabilization = False
+            if latest_frame.state is GameState.GAME_OVER:
+                # Soft reset: re-explore the level but keep learned color/control knowledge
+                self.reset_exploration_only()
+                logger.info("GAME_OVER: Soft reset - preserving learned colors/controls, clearing exploration graph")
+            else:
+                self.last_state = None
+                self.last_action = None
+                self.last_grid = None
+                self.prev_player_pos = None
+                self.action_queue = []
+                self.waiting_for_stabilization = False
             return GameAction.RESET
 
-        if latest_frame.full_reset:
-            self.reset_graph_for_level()
+        # Determine if click game
+        if self.game_id == "vc33":
+            self.is_click_game_flag = True
+        elif latest_frame.available_actions:
+            has_click = GameAction.ACTION6.value in latest_frame.available_actions
+            has_move = any(act.value in latest_frame.available_actions for act in [GameAction.ACTION1, GameAction.ACTION2, GameAction.ACTION3, GameAction.ACTION4])
+            if has_click and not has_move:
+                self.is_click_game_flag = True
+            else:
+                self.is_click_game_flag = False
 
         # Get background/padding colors dynamically
         bg_colors = self.get_background_colors(latest_frame.frame)
-        curr_components = self.get_components(latest_frame.frame, bg_colors)
+        curr_components = self.get_components(latest_frame.frame, bg_colors, same_color=self.is_click_game_flag)
 
         # 2.5 Animation stabilization check for vc33
         if self.game_id == "vc33" and self.waiting_for_stabilization:
@@ -674,7 +712,7 @@ class MyAgent(Agent):
             if self.last_grid is not None and self.last_action is not None:
                 act, _ = self.last_action
                 if act in (GameAction.ACTION1, GameAction.ACTION2, GameAction.ACTION3, GameAction.ACTION4):
-                    prev_components = self.get_components(self.last_grid, bg_colors)
+                    prev_components = self.get_components(self.last_grid, bg_colors, same_color=self.is_click_game_flag)
                     
                     # Match previous components to current components
                     moving_components = []
