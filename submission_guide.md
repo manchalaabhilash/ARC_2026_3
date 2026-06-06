@@ -24,7 +24,7 @@ Go to → [https://www.kaggle.com/settings](https://www.kaggle.com/settings) →
 
 This downloads a `kaggle.json` file. Extract the token value from it:
 ```json
-{"username":"manchalaabhilash","key":"YOUR_API_KEY_HERE"}
+{"username":"abhilashmanchala","key":"YOUR_API_KEY_HERE"}
 ```
 
 Save just the `key` value as a one-line file in the project:
@@ -39,13 +39,13 @@ Edit [`notebooks/kernel-metadata.json`](file:///Users/sunnyluffy/test/kagglle/AR
 
 ```json
 {
-  "id": "manchalaabhilash/arc-prize-2026-arc-agi-3-starter",
+  "id": "abhilashmanchala/arc-prize-2026-arc-agi-3-starter",
   "title": "ARC Prize 2026 — ARC-AGI-3 Starter",
   ...
 }
 ```
 
-Replace `REPLACE_WITH_YOUR_USERNAME` with `manchalaabhilash`.
+Replace `REPLACE_WITH_YOUR_USERNAME` with `abhilashmanchala`.
 
 > ⚠️ **This is required only once.** After the first push, Kaggle tracks the kernel by this ID.
 
@@ -97,7 +97,7 @@ make status
 ```
 
 Or go to your Kaggle kernels page:  
-`https://www.kaggle.com/manchalaabhilash/arc-prize-2026-arc-agi-3-starter`
+`https://www.kaggle.com/abhilashmanchala/arc-prize-2026-arc-agi-3-starter`
 
 The run takes **~9 hours** on the private test set. Check back after.
 
@@ -128,8 +128,8 @@ agent/my_agent.py  →  git push origin main  →  make submit  →  Kaggle kern
 | Requirement | Status |
 |-------------|--------|
 | `agent/my_agent.py` coded & tested | ✅ Done |
-| Code pushed to GitHub | ✅ `https://github.com/manchalaabhilash/ARC_2026_3` |
-| `notebooks/kernel-metadata.json` username updated | ❌ Need to add `manchalaabhilash` |
+| Code pushed to GitHub | ✅ `https://github.com/abhilashmanchala/ARC_2026_3` |
+| `notebooks/kernel-metadata.json` username updated | ❌ Need to add `abhilashmanchala` |
 | `.kaggle/access_token` file created | ❌ Need your Kaggle API key |
 
 Once those two items are done:
